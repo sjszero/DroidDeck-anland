@@ -57,13 +57,17 @@ The APK lands in `app/build/outputs/apk/release/`. Install it with `tools/deploy
 
 On Windows, see `tools/run_windows.ps1` and `tools/prepare_windows_runtime.py`.
 
+An optional [Anland v5 backend](tools/anland/README.md) lets Gamescope and KWin render into Android host buffers and submit through DroidDeck's existing SurfaceControl path. The default Wayland and game display paths remain available. Enabling Anland requires rebuilt app and WM components; setup and current device and feature limits are documented in the linked guide.
+
 ## Limits
 
-Compatibility and performance vary by device. Desktop compositing is software rendered, and Firefox sandboxing is reduced under proot.
+Compatibility and performance vary by device. Desktop rendering depends on the selected compositor backend, and Firefox sandboxing is reduced under proot.
 
 ## Credits and licence
 
 DroidDeck is [GPL-3.0](LICENSE). Steam and Proton belong to Valve Corporation. VITURE, RayNeo, XREAL, Rokid, REDMAGIC, Nintendo Switch and Joy-Con are trademarks of their owners. This project is not affiliated with any of them.
+
+The optional Anland integration includes the public producer library and WM backends from [Anland](https://github.com/sjszero/anland); its revision, adapted files and licence are recorded in [tools/anland](tools/anland/README.md).
 
 <details>
 <summary><b>Runtime, Wine and Proton</b></summary>

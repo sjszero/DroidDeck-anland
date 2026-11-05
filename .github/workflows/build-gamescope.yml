@@ -7,6 +7,7 @@ on:
       - 'tools/gamescope/build-in-arch.sh'
       - 'tools/gamescope/patches/**'
       - 'tools/gamescope/runtime-sonames.txt'
+      - 'tools/anland/**'
       - '.github/workflows/build-gamescope.yml'
   workflow_dispatch:
     inputs:

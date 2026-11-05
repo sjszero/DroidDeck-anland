@@ -24,7 +24,7 @@ class DesktopGpuWindowTest(unittest.TestCase):
         fake.chmod(0o755)
 
     def run_gpu(self, **env):
-        base = {k: v for k, v in os.environ.items() if k not in KEYS + ("BL_DEBUG_DIR", "BL_DESKTOP_GPU_WINDOW")}
+        base = {k: v for k, v in os.environ.items() if k not in KEYS + ("BL_DEBUG_DIR", "BL_DESKTOP_GPU_WINDOW", "DROIDDECK_KWIN_BACKEND")}
         base.update(PATH="%s:%s" % (self.tmp, os.environ["PATH"]), BL_WIDTH="1280", BL_HEIGHT="720", **env)
         subprocess.run(["bash", str(GPU), "game.exe"], env=base, check=True, capture_output=True)
         return json.loads(self.out.read_text())
@@ -62,6 +62,23 @@ class DesktopGpuWindowTest(unittest.TestCase):
             self.assertEqual(child["MESA_VK_WSI_DEBUG"], expected)
             self.assertEqual(child["SDL_VIDEODRIVER"], "x11")
             self.assertIsNone(child["BL_GPU_CHILD_WSI"])
+
+    def test_anland_desktop_window_uses_gpu_wsi(self):
+        run = self.run_gpu(WAYLAND_DISPLAY="wayland-1", DROIDDECK_KWIN_BACKEND="anland",
+                           MESA_VK_WSI_DEBUG="sw,linear")
+        self.assertEqual(run["args"][:2], ["--backend", "sdl"])
+        self.assertEqual(run["env"]["WAYLAND_DISPLAY"], "wayland-1")
+        self.assertEqual(run["env"]["SDL_VIDEODRIVER"], "wayland")
+        self.assertEqual(run["env"]["MESA_VK_WSI_DEBUG"], "linear")
+        self.assertEqual(run["env"]["BL_GPU_CHILD_WSI"], "linear")
+
+    def test_anland_desktop_fullscreen_game_stays_inside_kwin(self):
+        run = self.run_gpu(WAYLAND_DISPLAY="wayland-1", DROIDDECK_KWIN_BACKEND="anland",
+                           BL_DESKTOP_GPU_WINDOW="0", MESA_VK_WSI_DEBUG="sw,linear")
+        self.assertEqual(run["args"][:2], ["--backend", "wayland"])
+        self.assertIn("-f", run["args"])
+        self.assertEqual(run["env"]["WAYLAND_DISPLAY"], "wayland-1")
+        self.assertEqual(run["env"]["MESA_VK_WSI_DEBUG"], "linear")
 
     def test_outside_a_window_the_game_keeps_its_settings(self):
         script = "import os; print(os.environ.get('MESA_VK_WSI_DEBUG'), os.environ.get('SDL_VIDEODRIVER'))"

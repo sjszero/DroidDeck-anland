@@ -36,6 +36,7 @@
 #include "droiddeck_ext.h"
 #include "droiddeck_color.h"
 #include "compositor_internal.h"
+#include "anland_bridge.h"
 
 #define WLOGI(...) __android_log_print(ANDROID_LOG_INFO, "DroidDeckWayland", __VA_ARGS__)
 #define WLOGE(...) __android_log_print(ANDROID_LOG_ERROR, "DroidDeckWayland", __VA_ARGS__)
@@ -1810,6 +1811,7 @@ static void add_tree(struct draw_list *dl, struct surface *s, int ox, int oy, in
 }
 
 static void scene_size(int *w, int *h) {
+    if (anland_bridge_active()) { *w = g_output_w; *h = g_output_h; return; }
     struct surface *s;
     long long best = 0;
 
@@ -2137,6 +2139,7 @@ static int64_t scene_next_due(int64_t now, int64_t due, int limit) {
 }
 
 static void render_scene(void) {
+    if (anland_bridge_active()) { g_dirty = 0; g_dirty_since_ns = 0; return; }
     g_scene_due_ns = scene_next_due(now_ns(), g_scene_due_ns, g_fps_limit);
     if (atomic_load(&g_stream_on)) { g_dirty_since_ns = 0; render_stream(); return; }
     struct draw_list dl = {0};
@@ -3279,6 +3282,7 @@ static void publish_query_state(void) {
 }
 
 int droiddeck_focus_takes_touch(void) {
+    if (anland_bridge_active()) return 1;
     pthread_mutex_lock(&g_query_lock);
     int takes_touch = g_query.focus_takes_touch;
     pthread_mutex_unlock(&g_query_lock);
@@ -3286,6 +3290,7 @@ int droiddeck_focus_takes_touch(void) {
 }
 
 int droiddeck_cursor_input_pos(int *x, int *y) {
+    if (anland_bridge_active()) return anland_bridge_cursor_pos(x, y);
     pthread_mutex_lock(&g_query_lock);
     int has_position = g_query.has_position;
     int input_x = g_query.input_x, input_y = g_query.input_y;
@@ -3533,6 +3538,7 @@ static int on_input_readable(int fd, uint32_t mask, void *data) {
     int vsync = 0;
     int64_t vsync_ns = 0;
     while (read(fd, &m, sizeof(m)) == (ssize_t)sizeof(m)) {
+        if (anland_bridge_input(m.type, m.p1, m.p2, m.p3, m.p4)) continue;
         switch (m.type) {
         case 1: deliver_key(&m); break;
         case 2: pointer_event(m.p1, m.p2, 0, 0); break;
@@ -3560,6 +3566,7 @@ static int on_input_readable(int fd, uint32_t mask, void *data) {
         output_notify_mode();
         wl_display_flush_clients(g_display);
     }
+    anland_bridge_tick(g_output_w, g_output_h, (uint32_t)atomic_load(&g_output_refresh_mhz), g_fps_limit);
     if (vsync) on_vsync(vsync_ns);
     return 0;
 }
@@ -3807,6 +3814,25 @@ static void start_test_input(struct wl_event_loop *loop) {
 
 static struct wl_listener g_client_created = { .notify = on_client_created };
 
+void droiddeck_anland_frame(void) {
+    hud_frame_shown(now_ns());
+    g_stat_frames++;
+    droiddeck_on_game_frame();
+}
+
+void droiddeck_anland_session(int enabled) {
+    if (enabled) {
+        for (uint32_t key = 0; key < 0x300; key++)
+            if (g_keys_down[key >> 3] & (1u << (key & 7))) key_event(key, 0);
+        touch_cancel_all();
+        for (uint32_t button = BTN_LEFT; button <= BTN_TASK; button++)
+            pointer_button(button, 0);
+        cursor_publish_hidden();
+    } else {
+        schedule_render();
+    }
+}
+
 int droiddeck_wayland_run(void) {
     wl_list_init(&g_surfaces);
     wl_list_init(&g_toplevels);
@@ -3877,8 +3903,12 @@ int droiddeck_wayland_run(void) {
         wl_event_source_timer_update(g_stats_timer, 10000);
 
     g_output_announced_refresh_mhz = atomic_load(&g_output_refresh_mhz);
+    if (anland_bridge_start(wl_display_get_event_loop(display), rt, g_output_w, g_output_h,
+                            (uint32_t)g_output_announced_refresh_mhz) != 0)
+        droiddeck_log("anland", "compatibility endpoint unavailable: %s", strerror(errno));
     wl_display_run(display);
 
+    anland_bridge_stop();
     wl_display_destroy(display);
     return 0;
 }

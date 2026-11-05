@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'tools/desktop-kde/**'
+      - 'tools/anland/**'
       - '.github/workflows/build-desktop-kde.yml'
   workflow_dispatch:
     inputs:

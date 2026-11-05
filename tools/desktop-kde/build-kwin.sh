@@ -53,6 +53,7 @@ sudo tar -xf "$work/kwin.tar.xz" -C "$work/root/build"
 sudo patch -d "$work/root/build/kwin-$version" -p1 < "$here/patches/0001-respect-nested-desktop-scale.patch"
 sudo patch -d "$work/root/build/kwin-$version" -p1 < "$here/patches/0002-select-explicit-nested-render-node.patch"
 sudo patch -d "$work/root/build/kwin-$version" -p1 < "$here/patches/0003-forward-nested-scroll-source.patch"
+sudo python3 "$here/../anland/stage.py" kwin "$work/root/build/kwin-$version"
 sudo chroot "$work/root" /usr/bin/env PATH=/usr/bin:/bin HOME=/root LC_ALL=C.UTF-8 \
     /usr/bin/cmake -S "/build/kwin-$version" -B /build/out -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBEXECDIR=lib \
@@ -74,6 +75,7 @@ grep -aq DROIDDECK_NESTED_SCALE "$out/libkwin.so.$version"
     echo "Patch sha256 $(sha256sum "$here/patches/0001-respect-nested-desktop-scale.patch" | cut -d' ' -f1)"
     echo "Render node patch sha256 $(sha256sum "$here/patches/0002-select-explicit-nested-render-node.patch" | cut -d' ' -f1)"
     echo "Scroll source patch sha256 $(sha256sum "$here/patches/0003-forward-nested-scroll-source.patch" | cut -d' ' -f1)"
+    echo "Anland sources sha256 $(sha256sum "$here/../anland/upstream/SOURCE.json" | cut -d' ' -f1)"
     echo "Executable sha256 $(sha256sum "$out/kwin_wayland" | cut -d' ' -f1)"
     echo "Library sha256 $(sha256sum "$out/libkwin.so.$version" | cut -d' ' -f1)"
     echo 'Build packages (Arch Linux ARM signatures verified):'

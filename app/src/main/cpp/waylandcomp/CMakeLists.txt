@@ -1,5 +1,7 @@
 add_library(droiddeckwayland SHARED
         src/compositor.c
+        src/anland_server.c
+        src/anland_bridge.c
         src/vk_present.c
         src/effects_chain.c
         src/cardboard.c
@@ -43,6 +45,7 @@ target_include_directories(droiddeckwayland PRIVATE
         generated
         prebuilt/include
         src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../tools/anland/upstream/common
         ${CMAKE_CURRENT_SOURCE_DIR}/../shaders
         ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../tools/gpuload/src
 )

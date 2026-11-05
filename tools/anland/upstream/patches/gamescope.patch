@@ -1,0 +1,322 @@
+diff --git a/src/backend.h b/src/backend.h
+--- a/src/backend.h
++++ b/src/backend.h
+@@ -369,6 +369,8 @@
+         virtual bool SupportsTearing() const = 0;
+ 
+         virtual bool UsesVulkanSwapchain() const = 0;
++        virtual bool RequiresDrmPrimaryNode() const { return !UsesVulkanSwapchain(); }
++        virtual const char *GetRenderNodeOverride() const { return nullptr; }
+         virtual bool IsSessionBased() const = 0;
+ 
+         virtual bool SupportsExplicitSync() const = 0;
+diff --git a/src/backends.h b/src/backends.h
+--- a/src/backends.h
++++ b/src/backends.h
+@@ -10,6 +10,7 @@
+         SDL,
+         OpenVR,
+         Headless,
++        Anland,
+         Wayland,
+     };
+ 
+@@ -18,5 +19,6 @@
+     class CDRMBackend;
+     class COpenVRBackend;
+     class CHeadlessBackend;
++    class CAnlandBackend;
+     class CWaylandBackend;
+ }
+diff --git a/src/ime.cpp b/src/ime.cpp
+--- a/src/ime.cpp
++++ b/src/ime.cpp
+@@ -1,12 +1,15 @@
+ #include "ime.hpp"
++#ifndef ANLAND_IME_SEAT_TEST
+ #include "wlserver.hpp"
+ #include "log.hpp"
++#endif
+ 
+ #include <assert.h>
+ #include <unistd.h>
+ #include <string.h>
+ 
+ #include <deque>
++#include <string>
+ #include <unordered_map>
+ #include <vector>
+ 
+@@ -112,6 +115,8 @@
+ 	struct wl_event_source *ime_reset_ime_keyboard_event_source;
+ 	struct wl_event_source *ime_release_ime_keypress_event_source;
+ 
++    std::string local_text;
++    struct wl_event_source *local_text_timer = nullptr;
+ 	uint32_t uFakeTimestamp = 0;
+ };
+ 
+@@ -592,8 +597,69 @@
+ 	ime->ime_release_ime_keypress_event_source = wl_event_loop_add_timer(manager->server->event_loop, release_key_if_needed, ime);
+ }
+ 
++static int local_text_tick(void *data)
++{
++    auto *ime = static_cast<wlserver_input_method *>(data);
++    if (ime->local_text.empty()) return 0;
++
++    // Send one complete UTF-8 code point per timer tick.
++    reset_ime_keyboard(ime);
++    const size_t end = utf8_size(ime->local_text.c_str());
++    if (!end || end > ime->local_text.size()) {
++        ime->local_text.clear();
++        return 0;
++    }
++    std::string batch = ime->local_text.substr(0, end);
++    ime->local_text.erase(0, end);
++    type_text(ime, batch.c_str());
++    wl_event_source_timer_update(ime->manager->ime_reset_keyboard_event_source, 100);
++    if (!ime->local_text.empty())
++        wl_event_source_timer_update(ime->local_text_timer, 150);
++    return 0;
++}
++
++bool type_local_text(struct wlserver_input_method *ime, const char *text, size_t size)
++{
++    if (!ime || !ime->local_text_timer || !text) return false;
++    if (size > 65536 || ime->local_text.size() + size > 65536) return false;
++
++    for (size_t i = 0; i < size;) {
++        const unsigned char c = static_cast<unsigned char>(text[i]);
++        const size_t n = c == 0 ? 0 : c < 0x80 ? 1 :
++            c >= 0xC2 && c <= 0xDF ? 2 :
++            c >= 0xE0 && c <= 0xEF ? 3 :
++            c >= 0xF0 && c <= 0xF4 ? 4 : 0;
++        if (!n || i + n > size) return false;
++        for (size_t j = 1; j < n; ++j)
++            if ((static_cast<unsigned char>(text[i + j]) & 0xC0) != 0x80) return false;
++        if (n == 3 && ((c == 0xE0 && static_cast<unsigned char>(text[i + 1]) < 0xA0) ||
++                       (c == 0xED && static_cast<unsigned char>(text[i + 1]) >= 0xA0))) return false;
++        if (n == 4 && ((c == 0xF0 && static_cast<unsigned char>(text[i + 1]) < 0x90) ||
++                       (c == 0xF4 && static_cast<unsigned char>(text[i + 1]) >= 0x90))) return false;
++        i += n;
++    }
++
++    const bool idle = ime->local_text.empty();
++    ime->local_text.append(text, size);
++    // Do not restart an armed timer: bursts must not shorten keymap lifetime.
++    if (idle && size)
++        wl_event_source_timer_update(ime->local_text_timer, 150);
++    return true;
++}
++
++void cancel_local_text(struct wlserver_input_method *ime)
++{
++    if (!ime) return;
++    ime->local_text.clear();
++    if (ime->local_text_timer)
++        wl_event_source_timer_update(ime->local_text_timer, 0);
++    reset_ime_keyboard(ime);
++}
++
+ struct wlserver_input_method *create_local_ime()
+ {
++	if (!global_manager || !global_manager->server)
++		return nullptr;
+ 	struct wlserver_input_method *ime = new wlserver_input_method();
+ 	ime->resource = nullptr;
+ 	ime->manager = global_manager;
+@@ -607,9 +673,30 @@
+ 
+ 	wlr_keyboard_set_repeat_info(&ime->keyboard, 0, 0);
+ 
++    ime->local_text_timer = wl_event_loop_add_timer(global_manager->server->event_loop, local_text_tick, ime);
+ 	ime->ime_reset_ime_keyboard_event_source = wl_event_loop_add_timer(global_manager->server->event_loop, reset_ime_keyboard, ime);
+ 	ime->ime_release_ime_keypress_event_source = wl_event_loop_add_timer(global_manager->server->event_loop, release_key_if_needed, ime);
+ 
++    if (!ime->local_text_timer || !ime->ime_reset_ime_keyboard_event_source ||
++        !ime->ime_release_ime_keypress_event_source) {
++        if (ime->local_text_timer) {
++            wl_event_source_remove(ime->local_text_timer);
++            ime->local_text_timer = nullptr;
++        }
++        if (ime->ime_reset_ime_keyboard_event_source &&
++            ime->ime_release_ime_keypress_event_source) {
++            destroy_ime(ime);
++        } else {
++            if (ime->ime_reset_ime_keyboard_event_source)
++                wl_event_source_remove(ime->ime_reset_ime_keyboard_event_source);
++            if (ime->ime_release_ime_keypress_event_source)
++                wl_event_source_remove(ime->ime_release_ime_keypress_event_source);
++            wlr_keyboard_finish(&ime->keyboard);
++            free(ime->pending.string);
++        }
++        delete ime;
++        return nullptr;
++    }
+ 	return ime;
+ }
+ 
+@@ -653,3 +740,16 @@
+ 
+ 	global_manager = manager;
+ }
++
++// Paired with create_local_ime; only used by local backend-owned IMEs.
++void destroy_local_ime(struct wlserver_input_method *ime)
++{
++    if (!ime) return;
++    cancel_local_text(ime);
++    if (ime->local_text_timer) {
++        wl_event_source_remove(ime->local_text_timer);
++        ime->local_text_timer = nullptr;
++    }
++    destroy_ime(ime);
++    delete ime;
++}
+diff --git a/src/ime.hpp b/src/ime.hpp
+--- a/src/ime.hpp
++++ b/src/ime.hpp
+@@ -2,7 +2,10 @@
+ 
+ #pragma once
+ 
++#include <stddef.h>
++#ifndef ANLAND_IME_SEAT_TEST
+ #include "wlserver.hpp"
++#endif
+ #include "gamescope-input-method-protocol.h"
+ 
+ void create_ime_manager(struct wlserver_t *wlserver);
+@@ -11,3 +14,9 @@
+ void destroy_ime(struct wlserver_input_method * ime);
+ void type_text(struct wlserver_input_method *ime, const char *text);
+ void perform_action(struct wlserver_input_method *ime, enum gamescope_input_method_action action);
++
++void destroy_local_ime(struct wlserver_input_method *ime);
++
++// Bounded asynchronous input for backend-owned local IMEs. Returns false on invalid UTF-8 or overflow.
++bool type_local_text(struct wlserver_input_method *ime, const char *text, size_t size);
++void cancel_local_text(struct wlserver_input_method *ime);
+diff --git a/src/main.cpp b/src/main.cpp
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -195,6 +195,7 @@
+ #if HAVE_OPENVR
+ 	"                                     openvr => use OpenVR backend (outputs as a VR overlay)\n"
+ #endif
++	"                                     anland => direct Anland host buffers (experimental)\n"
+ 	"                                     headless => use headless backend (no window, no DRM output)\n"
+ 	"                                     wayland => use Wayland backend\n"
+ 	"  --cursor                       path to default cursor image\n"
+@@ -433,6 +434,8 @@
+ 	} else if (strcmp(str, "openvr") == 0) {
+ 		return gamescope::GamescopeBackend::OpenVR;
+ #endif
++	} else if (strcmp(str, "anland") == 0) {
++        return gamescope::GamescopeBackend::Anland;
+ 	} else if (strcmp(str, "headless") == 0) {
+ 		return gamescope::GamescopeBackend::Headless;
+ 	} else if (strcmp(str, "wayland") == 0) {
+@@ -960,7 +963,7 @@
+ 		eCurrentBackend = auto_select_backend();
+ 	}
+ 
+-	if ( g_pOriginalWaylandDisplay != NULL )
++	if ( g_pOriginalWaylandDisplay != NULL && eCurrentBackend != gamescope::GamescopeBackend::Anland )
+ 	{
+         if (CheckWaylandPresentationTime())
+         {
+@@ -998,6 +1001,9 @@
+ 			gamescope::IBackend::Set<gamescope::COpenVRBackend>();
+ 			break;
+ #endif
++		case gamescope::GamescopeBackend::Anland:
++            gamescope::IBackend::Set<gamescope::CAnlandBackend>();
++            break;
+ 		case gamescope::GamescopeBackend::Headless:
+ 			gamescope::IBackend::Set<gamescope::CHeadlessBackend>();
+ 			break;
+diff --git a/src/meson.build b/src/meson.build
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -125,6 +125,8 @@
+   'LibInputHandler.cpp',
+ ]
+ 
++subdir('Backends/anland')
++
+ luajit_dep = dependency( 'luajit' )
+ libinput_dep = dependency('libinput', required: true)
+ 
+@@ -194,7 +196,7 @@
+     src, reshade_src, gamescope_version,
+     include_directories : [reshade_include, sol2_include],
+     dependencies: [
+-      dep_wayland, dep_x11, dep_xdamage, dep_xcomposite, dep_xrender, dep_xext, dep_xfixes,
++      anland_dep, dep_wayland, dep_x11, dep_xdamage, dep_xcomposite, dep_xrender, dep_xext, dep_xfixes,
+       dep_xxf86vm, dep_xres, glm_dep, drm_dep, wayland_server,
+       xkbcommon, thread_dep, sdl2_dep, wlroots_dep,
+       vulkan_dep, liftoff_dep, dep_xtst, dep_xmu, cap_dep, epoll_dep, pipewire_dep, librt_dep,
+diff --git a/src/rendervulkan.cpp b/src/rendervulkan.cpp
+--- a/src/rendervulkan.cpp
++++ b/src/rendervulkan.cpp
+@@ -478,7 +478,7 @@
+ 		};
+ 		vk.GetPhysicalDeviceProperties2( physDev(), &props2 );
+ 
+-		if ( !GetBackend()->UsesVulkanSwapchain() && !drmProps.hasPrimary ) {
++		if ( GetBackend()->RequiresDrmPrimaryNode() && !drmProps.hasPrimary ) {
+ 			vk_log.errorf( "physical device has no primary node" );
+ 			return false;
+ 		}
+@@ -512,6 +512,23 @@
+ #endif
+ 	}
+ 
++	// Imported-output backends can provide an explicit render node when the
++	// Vulkan driver (e.g. Turnip KGSL) cannot expose physical_device_drm.
++	if ( !hasDrmProps && GetBackend()->GetRenderNodeOverride() ) {
++		const char *path = GetBackend()->GetRenderNodeOverride();
++		int fd = open( path, O_RDWR | O_CLOEXEC );
++		if ( fd < 0 ) {
++			vk_log.errorf_errno( "failed to open explicit render node %s", path );
++			return false;
++		}
++		if ( drmGetNodeTypeFromFd( fd ) != DRM_NODE_RENDER ) {
++			vk_log.errorf( "explicit device is not a DRM render node: %s", path );
++			close( fd );
++			return false;
++		}
++		m_drmRendererFd = fd;
++		vk_log.infof( "using explicit render node %s; Vulkan/device pairing is caller-selected", path );
++	}
+ 	if ( m_bSupportsModifiers && !supportsForeignQueue ) {
+ 		vk_log.infof( "The vulkan driver does not support foreign queues,"
+ 		              " disabling modifier support.");
+diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -11056,9 +11056,9 @@
+ 
+ 			// If we are running behind, allow tearing.
+ 
+-			// A false vblank value means bShouldPaint will resolve to false below, effectively ignoring this flag and losing any request
+-			// to force a repaint. Don't clear g_bForceRepaint unless vblank is true.
+-			const bool bForceRepaint = vblank && g_bForceRepaint.exchange(false);
++			const bool bBackendPaused = GetBackend()->IsPaused();
++			// A force request must survive until a vblank with a writable target.
++			const bool bForceRepaint = vblank && !bBackendPaused && g_bForceRepaint.exchange(false);
+ 			const bool bForceSyncFlip = bForceRepaint || is_fading_out( pPaintFocus );
+ 
+ 			// If we are compositing, always force sync flips because we currently wait
+@@ -11156,7 +11156,8 @@
+ 				bShouldPaint = false;
+ 			}
+ 
+-			if ( bShouldPaint )
++			// Keep pending damage while waiting for a writable target.
++			if ( bShouldPaint && !bBackendPaused )
+ 			{
+ 				paint_all( pPaintFocus, eFlipType == FlipType::Async );
+ 

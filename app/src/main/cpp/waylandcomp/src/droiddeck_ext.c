@@ -8,6 +8,7 @@
 #include "droiddeck_ext.h"
 #include "ahb_swapchain.h"
 #include "droiddeck_color.h"
+#include "anland_bridge.h"
 
 enum host_kind { HOST_CLIPBOARD = 1, HOST_TEXT_COMMIT, HOST_TEXT_PREEDIT, HOST_TEXT_DELETE, HOST_ZERO_COPY, HOST_HDR_OUTPUT };
 
@@ -75,16 +76,30 @@ static int on_wake(int fd, uint32_t mask, void *data) {
         if (!m) break;
         switch (m->kind) {
         case HOST_CLIPBOARD:
+            if (anland_bridge_clipboard(m->text, m->len)) break;
             clipboard_host_text(m->text, m->len);
             m->text = NULL;
             break;
         case HOST_TEXT_COMMIT:
+            if (anland_bridge_text(m->text ? m->text : "", m->len)) break;
             text_input_host_commit(m->text ? m->text : "", m->len);
             break;
         case HOST_TEXT_PREEDIT:
+            if (anland_bridge_active()) break;
             text_input_host_preedit(m->text ? m->text : "", m->len, m->a, m->b);
             break;
         case HOST_TEXT_DELETE:
+            if (anland_bridge_active()) {
+                for (int i = 0; i < m->a && i < 256; i++) {
+                    anland_bridge_input(1, 14, 1, 0, 0);
+                    anland_bridge_input(1, 14, 0, 0, 0);
+                }
+                for (int i = 0; i < m->b && i < 256; i++) {
+                    anland_bridge_input(1, 111, 1, 0, 0);
+                    anland_bridge_input(1, 111, 0, 0, 0);
+                }
+                break;
+            }
             text_input_host_delete(m->a, m->b);
             break;
         case HOST_ZERO_COPY:

@@ -1,0 +1,67 @@
+diff --git a/src/backends/CMakeLists.txt b/src/backends/CMakeLists.txt
+--- a/src/backends/CMakeLists.txt
++++ b/src/backends/CMakeLists.txt
+@@ -1,3 +1,4 @@
++add_subdirectory(anland)
+ add_subdirectory(drm)
+ add_subdirectory(fakeinput)
+ add_subdirectory(libinput)
+diff --git a/src/main_wayland.cpp b/src/main_wayland.cpp
+--- a/src/main_wayland.cpp
++++ b/src/main_wayland.cpp
+@@ -10,6 +10,7 @@
+ 
+ #include "config-kwin.h"
+ 
++#include "backends/anland/anland_backend.h"
+ #include "backends/drm/drm_backend.h"
+ #include "backends/virtual/virtual_backend.h"
+ #include "backends/wayland/wayland_backend.h"
+@@ -402,6 +403,7 @@
+                                      i18n("Exits this instance so it can be restarted by kwin_wayland_wrapper."));
+ 
+     QCommandLineOption drmOption(QStringLiteral("drm"), i18n("Render through drm node."));
++    QCommandLineOption anlandOption(QStringLiteral("anland"), i18n("Render to the anland display daemon."));
+     QCommandLineOption locale1Option(QStringLiteral("locale1"), i18n("Extract locale information from locale1 rather than the user's configuration"));
+ 
+     QCommandLineParser parser;
+@@ -426,6 +428,7 @@
+     parser.addOption(heightOption);
+     parser.addOption(scaleOption);
+     parser.addOption(outputCountOption);
++    parser.addOption(anlandOption);
+     parser.addOption(drmOption);
+     parser.addOption(locale1Option);
+     parser.addOption(fullscreenOption);
+@@ -490,6 +493,7 @@
+         X11,
+ #endif
+         Wayland,
++        Anland,
+         Virtual,
+     };
+ 
+@@ -499,7 +503,9 @@
+     qreal outputScale = 1;
+ 
+     // Decide what backend to use.
+-    if (parser.isSet(drmOption)) {
++    if (parser.isSet(anlandOption)) {
++        backendType = BackendType::Anland;
++    } else if (parser.isSet(drmOption)) {
+         backendType = BackendType::Kms;
+ #if KWIN_BUILD_X11
+     } else if (parser.isSet(x11DisplayOption)) {
+@@ -557,6 +563,12 @@
+     }
+ 
+     switch (backendType) {
++    case BackendType::Anland: {
++        const QString anlandSocket = qEnvironmentVariable("ANLAND_SOCKET");
++        a.setSession(KWin::Session::create(KWin::Session::Type::Noop));
++        a.setOutputBackend(std::make_unique<KWin::AnlandBackend>(anlandSocket));
++        break;
++    }
+     case BackendType::Kms:
+         a.setSession(KWin::Session::create());
+         if (!a.session()) {

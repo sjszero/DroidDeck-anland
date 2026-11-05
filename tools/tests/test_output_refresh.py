@@ -46,6 +46,7 @@ static atomic_int g_output_refresh_mhz = 60000;
 static atomic_int g_output_refresh_pending;
 static int g_output_announced_refresh_mhz = 60000;
 static int g_output_w = 1920, g_output_h = 1080;
+static int g_fps_limit;
 static int flushes, resizes, pointers, ticks;
 static int scale_changes, scale_mode, scale_alignment, renders;
 static void *g_display;
@@ -71,6 +72,8 @@ static void send_toplevel_configure(struct surface *s) { (void)s; resizes++; }
 #define pointer_delta(...) ((void)0)
 #define deliver_touch(m) ((void)0)
 #define deliver_pointer(m) (pointers++)
+#define anland_bridge_input(...) 0
+#define anland_bridge_tick(w, h, refresh, fps) ((void)(fps))
 static void on_vsync(int64_t ns) { assert(ns > 0); ticks++; }
 static void vk_present_set_scale_mode(int mode, int alignment) {
     scale_changes++; scale_mode = mode; scale_alignment = alignment;

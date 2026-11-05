@@ -8,6 +8,7 @@
 #include <android/rect.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <math.h>
 #include <poll.h>
 #include <pthread.h>
@@ -16,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -155,6 +157,7 @@ struct layer {
     int shown;
     int cur_slot;
     void *cur_token;
+    sc_layer_release_fn cur_release;
     ARect geo_src, geo_dst;
     int geo_valid;
     int alloc_tier;
@@ -211,6 +214,7 @@ struct complete_ctx {
     int layer;
     int prev_slot;
     void *prev_token;
+    sc_layer_release_fn prev_release;
     int retire;
 };
 
@@ -233,7 +237,10 @@ static void on_complete(void *context, ASurfaceTransactionStats *stats) {
     pthread_mutex_unlock(&g_lock);
     if (ctx->prev_token) {
         int fd = (stats && ctx->sc) ? api.prevReleaseFence(stats, ctx->sc) : -1;
-        ahb_swapchain_layer_released(ctx->prev_token, fd);
+        if (ctx->prev_release)
+            ctx->prev_release(ctx->prev_token, stats && ctx->sc ? fd : -2);
+        else
+            ahb_swapchain_layer_released(ctx->prev_token, fd);
     }
     if (ctx->retire && ctx->sc) api.release(ctx->sc);
     free(ctx);
@@ -245,6 +252,7 @@ static int add_complete_on(ASurfaceTransaction *tx, struct layer *l, ASurfaceCon
     if (!ctx) return -1;
     ctx->sc = sc; ctx->layer = (int)(l - g_layers); ctx->prev_slot = prev_slot;
     ctx->prev_token = prev_token; ctx->retire = retire;
+    ctx->prev_release = l->cur_release;
     pthread_mutex_lock(&g_lock);
     g_pending_cb++;
     pthread_mutex_unlock(&g_lock);
@@ -337,12 +345,16 @@ static void retire_sc(struct layer *l) {
         api.txApply(tx);
         api.txDelete(tx);
     } else {
-        if (l->cur_token) ahb_swapchain_layer_released(l->cur_token, -1);
+        if (l->cur_token) {
+            if (l->cur_release) l->cur_release(l->cur_token, -2);
+            else ahb_swapchain_layer_released(l->cur_token, -1);
+        }
         api.release(l->sc);
     }
     droiddeck_log("layer", "%s: SurfaceControl retired (window %p)", l->name, (void *)l->win);
     l->sc = NULL; l->win = NULL;
     l->shown = 0; l->cur_slot = -1; l->cur_token = NULL; l->geo_valid = 0;
+    l->cur_release = NULL;
     l->fps_applied = -1.0f;
     l->recreate_pending = 0;
     l->ds_applied = -1; l->md_applied = 0; l->hr_applied = -1.0f;
@@ -379,6 +391,34 @@ static int sniff_modifier(const struct droiddeck_native_handle *h, uint64_t *mod
     if ((uint32_t)h->data[h->numFds] != gmsm) return 0;
     *mod = (h->data[h->numFds + 1] & 0x08000000) ? MOD_QCOM_COMPRESSED : MOD_LINEAR;
     return 1;
+}
+
+int sc_layer_allocate_target(int w, int h, AHardwareBuffer **out, int *fd, uint32_t *stride,
+                              uint64_t *modifier) {
+    *out = NULL; *fd = -1;
+    if (w <= 0 || h <= 0 || w > 16384 || h > 16384 || load_api() != 0) return -1;
+    AHardwareBuffer_Desc desc = {
+        .width = (uint32_t)w, .height = (uint32_t)h, .layers = 1, .format = AHB_RGBA8,
+        .usage = AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT | AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
+                 AHARDWAREBUFFER_USAGE_COMPOSER_OVERLAY | AHARDWAREBUFFER_USAGE_CPU_READ_RARELY};
+    AHardwareBuffer *ahb = NULL;
+    if (AHardwareBuffer_allocate(&desc, &ahb) != 0 || !ahb) return -1;
+    AHardwareBuffer_describe(ahb, &desc);
+    const struct droiddeck_native_handle *nh = api.getNativeHandle(ahb);
+    uint64_t mod;
+    off_t bytes = nh && nh->numFds > 0 ? lseek(nh->data[0], 0, SEEK_END) : -1;
+    if (bytes >= 0) lseek(nh->data[0], 0, SEEK_SET);
+    if (!sniff_modifier(nh, &mod) || mod != MOD_LINEAR || desc.stride < (uint32_t)w ||
+        desc.stride > UINT32_MAX / 4 || desc.format != AHB_RGBA8 ||
+        bytes < (int64_t)desc.stride * 4 * h) {
+        droiddeck_log("anland", "external target needs a verified linear QTI dma-buf layout; keeping Wayland available");
+        AHardwareBuffer_release(ahb);
+        return -1;
+    }
+    int copy = fcntl(nh->data[0], F_DUPFD_CLOEXEC, 0);
+    if (copy < 0) { AHardwareBuffer_release(ahb); return -1; }
+    *out = ahb; *fd = copy; *stride = desc.stride * 4; *modifier = mod;
+    return 0;
 }
 
 #define SC_MOD_GRALLOC (~0ULL - 1)
@@ -773,6 +813,7 @@ static int present_slot(struct layer *l, int idx, const int r[8], const struct d
     api.txDelete(tx);
     l->cur_slot = idx;
     l->cur_token = NULL;
+    l->cur_release = NULL;
     if (!l->shown) { l->shown = 1; droiddeck_log("layer", "%s: layer shown", l->name); }
     g_stat_layer_frames++;
     return 0;
@@ -798,8 +839,8 @@ unsigned sc_layer_drops_take(void) {
     return n;
 }
 
-int sc_layer_present_ahb(AHardwareBuffer *ahb, int w, int h, int acquire_fd, void *token, int scene_w, int scene_h,
-                         const struct droiddeck_color *color, uint32_t ahb_format) {
+static int present_ahb(AHardwareBuffer *ahb, int w, int h, int acquire_fd, void *token, int scene_w, int scene_h,
+                       const struct droiddeck_color *color, uint32_t ahb_format, sc_layer_release_fn release) {
     struct layer *l = layer_of(SC_LAYER_GAME);
     int r[8];
     if (!ahb || !token || ensure_sc(l) != 0) goto unavailable;
@@ -838,6 +879,7 @@ int sc_layer_present_ahb(AHardwareBuffer *ahb, int w, int h, int acquire_fd, voi
     api.txDelete(tx);
     l->cur_slot = -1;
     l->cur_token = token;
+    l->cur_release = release;
     if (!l->shown) { l->shown = 1; droiddeck_log("layer", "%s: layer shown", l->name); }
     if (!l->first_logged) l->first_logged = 1;
     vkp_signal_first_frame();
@@ -846,6 +888,16 @@ int sc_layer_present_ahb(AHardwareBuffer *ahb, int w, int h, int acquire_fd, voi
 unavailable:
     if (acquire_fd >= 0) close(acquire_fd);
     return -1;
+}
+
+int sc_layer_present_ahb(AHardwareBuffer *ahb, int w, int h, int acquire_fd, void *token, int scene_w, int scene_h,
+                         const struct droiddeck_color *color, uint32_t ahb_format) {
+    return present_ahb(ahb, w, h, acquire_fd, token, scene_w, scene_h, color, ahb_format, NULL);
+}
+
+int sc_layer_present_external(AHardwareBuffer *ahb, int w, int h, int acquire_fd, void *token,
+                               sc_layer_release_fn release) {
+    return present_ahb(ahb, w, h, acquire_fd, token, w, h, NULL, AHB_RGBA8, release);
 }
 
 int sc_layer_present(struct vkp_image *src, int scene_w, int scene_h, const struct droiddeck_color *color) {
@@ -1005,6 +1057,7 @@ static void hide_layer(struct layer *l) {
     add_complete(tx, l, l->cur_slot, l->cur_token, 0);
     api.txApply(tx); api.txDelete(tx);
     l->shown = 0; l->cur_slot = -1; l->cur_token = NULL;
+    l->cur_release = NULL;
 }
 
 void sc_layer_hide(void) {

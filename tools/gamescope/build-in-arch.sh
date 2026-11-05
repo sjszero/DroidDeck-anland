@@ -6,10 +6,10 @@ cd "$WORK"
 grep -q '^DisableSandbox' /etc/pacman.conf || sed -i 's/^\[options\]/[options]\nDisableSandbox/' /etc/pacman.conf
 { for m in https://ca.us.mirror.archlinuxarm.org https://fl.us.mirror.archlinuxarm.org https://de3.mirror.archlinuxarm.org https://nl.mirror.archlinuxarm.org; do echo "Server = $m/\$arch/\$repo"; done; cat /etc/pacman.d/mirrorlist; } > /etc/pacman.d/mirrorlist.new
 mv /etc/pacman.d/mirrorlist.new /etc/pacman.d/mirrorlist
-pacman -Syu --noconfirm --needed git sudo zstd binutils
+pacman -Syu --noconfirm --needed git sudo zstd binutils python
 id builder >/dev/null 2>&1 || useradd -m builder
 echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
-rm -rf pkg && mkdir pkg && cp -r tools/gamescope/patches pkg/ && chown -R builder pkg
+rm -rf pkg && mkdir pkg && cp -r tools/gamescope/patches pkg/ && cp -r tools/anland pkg/ && chown -R builder pkg
 sudo -u builder bash -c "
 set -euxo pipefail
 cd pkg
@@ -30,6 +30,7 @@ _droiddeck_prepare() {
     echo \"applying \$(basename \"\$p\")\"
     patch -p1 --no-backup-if-mismatch < \"\$p\"
   done
+  python3 \"\$startdir/../anland/stage.py\" gamescope \"\$srcdir/gamescope\"
 }
 if declare -f prepare >/dev/null; then
   eval \"\$(declare -f prepare | sed 's/^prepare ()/_arch_prepare ()/')\"

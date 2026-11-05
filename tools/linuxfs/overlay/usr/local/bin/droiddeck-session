@@ -391,7 +391,23 @@ if [ -z "${BL_INSIDE:-}" ]; then
     export gamescope_composite_force=1
     echo "== gamescope: composites every frame (Mali bridge: the Steam UI flickers on separate planes)"
   fi
-  args=(--backend wayland --expose-wayland -f -W "$width" -H "$height" -w "$nested" -h "$nested_h")
+  display_backend=${DROIDDECK_GAMESCOPE_BACKEND:-wayland}
+  case "$display_backend" in
+    wayland) ;;
+    anland)
+      [ -S "${XDG_RUNTIME_DIR:?}/anland.sock" ] || { echo '== Anland host endpoint is unavailable' >&2; exit 1; }
+      gamescope --help 2>&1 | grep -q 'anland =>' || { echo '== Install the DroidDeck build of gamescope with Anland support first' >&2; exit 1; }
+      export ANLAND_SOCKET="$XDG_RUNTIME_DIR/anland.sock" ANLAND_DISABLE_AUDIO=1 ANLAND_DISABLE_CAMERA=1
+      if [ -z "${ANLAND_DRM_DEVICE:-}" ]; then
+        for node in /dev/dri/renderD0 /dev/dri/renderD307 /dev/dri/renderD*; do
+          if [ -c "$node" ]; then export ANLAND_DRM_DEVICE="$node"; break; fi
+        done
+      fi
+      echo '== gamescope: Anland host targets (DroidDeck keeps handling audio)'
+      ;;
+    *) echo "== Unknown gamescope display backend: $display_backend" >&2; exit 1 ;;
+  esac
+  args=(--backend "$display_backend" --expose-wayland -f -W "$width" -H "$height" -w "$nested" -h "$nested_h")
   if [ "$nested" != "$width" ] || [ "$nested_h" != "$height" ]; then
     args+=(-S stretch)
     export BL_STRETCHED=1

@@ -1,5 +1,17 @@
 #!/bin/bash
 if [ "${BL_DESKTOP:-}" = 1 ]; then
-  set -- --wayland-display wayland-0 --socket wayland-1 --width "${BL_WIDTH:-1280}" --height "${BL_HEIGHT:-720}" --no-lockscreen "$@"
+  case "${DROIDDECK_KWIN_BACKEND:-wayland}" in
+    wayland)
+      set -- --wayland-display wayland-0 --socket wayland-1 --width "${BL_WIDTH:-1280}" --height "${BL_HEIGHT:-720}" --no-lockscreen "$@"
+      ;;
+    anland)
+      [ -S "${XDG_RUNTIME_DIR:?}/anland.sock" ] || { echo 'Anland host endpoint is unavailable' >&2; exit 1; }
+      /usr/bin/kwin_wayland --help 2>&1 | grep -q -- '--anland' || { echo 'Install the DroidDeck build of KWin with Anland support first' >&2; exit 1; }
+      export ANLAND_SOCKET="$XDG_RUNTIME_DIR/anland.sock" ANLAND_DISABLE_AUDIO=1 ANLAND_DISABLE_CAMERA=1
+      [ -z "${ANLAND_DRM_DEVICE:-}" ] || export KWIN_RENDER_NODES="$ANLAND_DRM_DEVICE"
+      set -- --anland --socket wayland-1 --no-lockscreen "$@"
+      ;;
+    *) echo "Unknown KWin display backend: $DROIDDECK_KWIN_BACKEND" >&2; exit 1 ;;
+  esac
 fi
 exec /usr/bin/kwin_wayland_wrapper "$@"

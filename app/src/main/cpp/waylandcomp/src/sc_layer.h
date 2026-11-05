@@ -29,6 +29,12 @@ int sc_layer_present_hdr_scene(const struct vkp_draw *draws, int n, const struct
 int sc_layer_present_ahb(AHardwareBuffer *ahb, int w, int h, int acquire_fd, void *token,
                          int scene_w, int scene_h, const struct droiddeck_color *color, uint32_t ahb_format);
 
+typedef void (*sc_layer_release_fn)(void *token, int release_fd);
+int sc_layer_present_external(AHardwareBuffer *ahb, int w, int h, int acquire_fd, void *token,
+                               sc_layer_release_fn release);
+int sc_layer_allocate_target(int w, int h, AHardwareBuffer **ahb, int *fd, uint32_t *stride,
+                              uint64_t *modifier);
+
 void sc_layer_set_frame_rate(float fps);
 
 int sc_layer_overlay_affordable(void);
