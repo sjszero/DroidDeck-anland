@@ -127,6 +127,9 @@ static int log_budget(void) {
 #ifndef BTN_RIGHT
 #define BTN_RIGHT 0x111
 #endif
+#ifndef BTN_TASK
+#define BTN_TASK 0x117
+#endif
 
 #define INPUT_SPACE_W 1920
 #define INPUT_SPACE_H 1080

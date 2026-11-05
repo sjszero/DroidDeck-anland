@@ -43,10 +43,12 @@ target_sources(kwin PRIVATE
     libdisplay_producer/display_producer.c
     common/socket_utils.c
 )
-target_include_directories(kwin PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/libdisplay_producer
-    ${CMAKE_CURRENT_SOURCE_DIR}/common
+target_include_directories(kwin
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/libdisplay_producer
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/common>
 )
 # PkgConfig::PipeWire is already resolved at the top level for the screencast plugin.
 target_link_libraries(kwin PRIVATE Libdrm::Libdrm PkgConfig::PipeWire)

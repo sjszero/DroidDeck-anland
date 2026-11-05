@@ -16,7 +16,7 @@
     "gamescope/session.c": "c1527e77178441b92cbb96dc58e0e48a644c260d7acf8dd9cb79ad90ea85850c",
     "gamescope/session.h": "90fbe0a3be7bc614b0d6b4306daddff620ca0d4c1f42b644664a9c22dd22387f",
     "gamescope/touch_state.hpp": "d212e0ef4151135242f14e4491f0a72be6408d83c0be1133c624fc42a6b10b73",
-    "kwin/CMakeLists.txt": "8b24663570dffefeef61f29a8c52c9204a67673f7c5fbe33107d8e65d78d506b",
+    "kwin/CMakeLists.txt": "ed1dc8e164e7c24ebd885f7ab1573bb9c2fba432c17b133b6be685e021614ba0",
     "kwin/anland_backend.cpp": "40c8f3365501f6ba57c74a2f64c649ae1688fc109e02420b5d78d34153f65f38",
     "kwin/anland_backend.h": "2be2c83baa4ffecfdcb0e8cfccd91c7ed06a69a0e7c74874792fb5c2efdda662",
     "kwin/anland_egl_backend.cpp": "076f0dac644979d98e0449db757d908e4c254729c5309c519f83d9888ba4a9e9",
@@ -56,6 +56,7 @@
   "adaptations": {
     "gamescope/AnlandBackend.cpp": "Removed temporary X11 pointer queries and per-event diagnostic logging.",
     "patches/gamescope.patch": "Registration adapted to DroidDeck-patched Gamescope 3.16.29; retains DroidDeck WSI and focus fixes.",
-    "patches/kwin.patch": "Registration only; requires explicit --anland and retains normal implicit synchronization."
+    "patches/kwin.patch": "Registration only; requires explicit --anland and retains normal implicit synchronization.",
+    "kwin/CMakeLists.txt": "Expose common protocol headers to kwin_wayland through the build interface of kwin."
   }
 }
